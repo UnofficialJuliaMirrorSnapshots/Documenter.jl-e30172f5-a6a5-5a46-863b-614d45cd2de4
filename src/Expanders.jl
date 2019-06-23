@@ -24,7 +24,20 @@ import Base64: stringmime
 
 
 function expand(doc::Documents.Document)
-    for (src, page) in doc.internal.pages
+    priority_pages = filter(doc.user.expandfirst) do src
+        if src in keys(doc.internal.pages)
+            return true
+        else
+            @warn "$(src) in expandfirst does not exist"
+            return false
+        end
+    end
+    normal_pages = filter(src -> !(src in priority_pages), keys(doc.internal.pages))
+    normal_pages = sort([src for src in normal_pages])
+    @debug "pages" keys(doc.internal.pages) priority_pages normal_pages
+    for src in Iterators.flatten([priority_pages, normal_pages])
+        page = doc.internal.pages[src]
+        @debug "Running ExpanderPipeline on $src"
         empty!(page.globals.meta)
         for element in page.elements
             Selectors.dispatch(ExpanderPipeline, element, page, doc)
@@ -478,7 +491,7 @@ end
 function Selectors.runner(::Type{EvalBlocks}, x, page, doc)
     sandbox = Module(:EvalBlockSandbox)
     lines = Utilities.find_block_in_file(x.code, page.source)
-    cd(dirname(page.build)) do
+    cd(page.workdir) do
         result = nothing
         for (ex, str) in Utilities.parseblock(x.code, doc, page; keywords = false)
             try
@@ -540,7 +553,7 @@ function Selectors.runner(::Type{ExampleBlocks}, x, page, doc)
         end
         for (ex, str) in Utilities.parseblock(code, doc, page; keywords = false)
             (value, success, backtrace, text) = Utilities.withoutput() do
-                cd(dirname(page.build)) do
+                cd(page.workdir) do
                     Core.eval(mod, ex)
                 end
             end
@@ -597,7 +610,7 @@ function Selectors.runner(::Type{REPLBlocks}, x, page, doc)
         buffer = IOBuffer()
         input  = droplines(str)
         (value, success, backtrace, text) = Utilities.withoutput() do
-            cd(dirname(page.build)) do
+            cd(page.workdir) do
                 Core.eval(mod, ex)
             end
         end
@@ -634,7 +647,7 @@ function Selectors.runner(::Type{SetupBlocks}, x, page, doc)
     # Evaluate whole @setup block at once instead of piecewise
     page.mapping[x] =
     try
-        cd(dirname(page.build)) do
+        cd(page.workdir) do
             include_string(mod, x.code)
         end
         Markdown.MD([])

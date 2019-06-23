@@ -65,6 +65,7 @@ export Deps, makedocs, deploydocs, hide
         repo    = "",
         highlightsig = true,
         sitename = "",
+        expandfirst = [],
     )
 
 Combines markdown files and inline docstrings into an interlinked document.
@@ -159,6 +160,16 @@ is enabled by default.
 
 **`sitename`** is displayed in the title bar and/or the navigation menu when applicable.
 
+**`expandfirst`** allows some of the pages to be _expanded_ (i.e. at-blocks evaluated etc.)
+before the others. Documenter normally evaluates the files in the alphabetic order of their
+file paths relative to `src`, but `expandfirst` allows some pages to be prioritized.
+
+For example, if you have `foo.md` and `bar.md`, `bar.md` would normally be evaluated before
+`foo.md`. But with `expandfirst = ["foo.md"]`, you can force `foo.md` to be evaluated first.
+
+Evaluation order among the `expandfirst` pages is according to the order they appear in the
+argument.
+
 # Experimental keywords
 
 In addition to standard arguments there is a set of non-finalized experimental keyword
@@ -183,6 +194,20 @@ ignored.
 
 **`strict`** -- [`makedocs`](@ref) fails the build right before rendering if it encountered
 any errors with the document in the previous build phases.
+
+**`workdir`** determines the working directory where `@example` and `@repl` code blocks are
+executed. It can be either a path or the special value `:build` (default).
+
+If the `workdir` is set to a path, the working directory is reset to that path for each code
+block being evaluated. Relative paths are taken to be relative to `root`, but using absolute
+paths is recommended (e.g. `workdir = joinpath(@__DIR__, "..")` for executing in the package
+root for the usual `docs/make.jl` setup).
+
+With the default `:build` option, the working directory is set to a subdirectory of `build`,
+determined from the source file path. E.g. for `src/foo.md` it is set to `build/`, for
+`src/foo/bar.md` it is set to `build/foo` etc.
+
+Note that `workdir` does not affect doctests.
 
 ## Output formats
 **`format`** allows the output format to be specified. The default format is
