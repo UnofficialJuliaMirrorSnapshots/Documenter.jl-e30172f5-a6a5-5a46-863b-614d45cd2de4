@@ -31,6 +31,7 @@ a new `T` object will be created.
 """
 abstract type Plugin end
 
+abstract type Writer end
 
 # Submodules
 # ----------
@@ -906,8 +907,9 @@ function doctest(
                 modules = modules,
             )
             true
-        catch e
-            @error "Doctesting failed" e
+        catch err
+            @error "Doctesting failed"
+            showerror(stdout, err, catch_backtrace())
             false
         finally
             rm(dir; recursive=true)
