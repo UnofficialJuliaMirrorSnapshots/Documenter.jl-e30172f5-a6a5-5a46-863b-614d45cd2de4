@@ -53,6 +53,7 @@ import ...Documenter:
     Utilities,
     Writers
 
+using ...Utilities: JSDependencies
 import ...Utilities.DOM: DOM, Tag, @tags
 using ...Utilities.MDFlatten
 
@@ -115,6 +116,14 @@ for more information.
 Setting it to `false` can be useful when the logo already contains the name of the package.
 Defaults to `true`.
 
+**`highlights`** can be used to add highlighting for additional languages. By default,
+Documenter already highlights all the ["Common" highlight.js](https://highlightjs.org/download/)
+languages and Julia (`julia`, `julia-repl`). Additional languages must be specified by"
+their filenames as they appear on [CDNJS](https://cdnjs.com/libraries/highlight.js) for the
+highlight.js version Documenter is using. E.g. to include highlighting for YAML and LLVM IR,
+you would set `highlights = ["llvm", "yaml"]`. Note that no verification is done whether the
+provided language names are sane.
+
 # Default and custom assets
 
 Documenter copies all files under the source directory (e.g. `/docs/src/`) over
@@ -150,6 +159,7 @@ struct HTML <: Documenter.Writer
     analytics     :: String
     collapselevel :: Int
     sidebar_sitename :: Bool
+    highlights    :: Vector{String}
 
     function HTML(;
             prettyurls    :: Bool = true,
@@ -160,10 +170,11 @@ struct HTML <: Documenter.Writer
             analytics     :: String = "",
             collapselevel :: Integer = 2,
             sidebar_sitename :: Bool = true,
+            highlights :: Vector{String} = String[],
         )
         collapselevel >= 1 || thrown(ArgumentError("collapselevel must be >= 1"))
         new(prettyurls, disable_git, edit_branch, canonical, assets, analytics,
-            collapselevel, sidebar_sitename)
+            collapselevel, sidebar_sitename, highlights)
     end
 end
 
@@ -176,6 +187,56 @@ const fontawesome_css = [
 ]
 const highlightjs_css = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/default.min.css"
 const katex_css = "https://cdn.jsdelivr.net/npm/katex@0.10.2/dist/katex.min.css"
+
+"Provides a namespace for JS dependencies."
+module JS
+    using ....Utilities.JSDependencies: RemoteLibrary, Snippet, RequireJS, jsescape
+    const jquery = RemoteLibrary("jquery", "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js")
+    const jqueryui = RemoteLibrary("jqueryui", "https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.12.0/jquery-ui.min.js")
+    const headroom = RemoteLibrary("headroom", "https://cdnjs.cloudflare.com/ajax/libs/headroom/0.9.4/headroom.min.js")
+    const headroom_jquery = RemoteLibrary(
+        "headroom-jquery",
+        "https://cdnjs.cloudflare.com/ajax/libs/headroom/0.9.4/jQuery.headroom.min.js",
+        deps = ["jquery", "headroom"],
+    )
+    # FIXME: upgrade KaTeX to v0.11.0
+    const katex = RemoteLibrary("katex", "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.2/katex.min.js")
+    const katex_auto_render = RemoteLibrary(
+        "katex-auto-render",
+        "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.2/contrib/auto-render.min.js",
+        deps = ["katex"],
+    )
+    const lunr = RemoteLibrary("lunr", "https://cdnjs.cloudflare.com/ajax/libs/lunr.js/2.3.5/lunr.min.js")
+    const lodash = RemoteLibrary("lodash", "https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.11/lodash.min.js")
+
+    # highlight.js
+    "Add the highlight.js dependencies and snippet to a [`RequireJS`](@ref) declaration."
+    function highlightjs!(r::RequireJS, languages = String[])
+        hljs_version = "9.15.9"
+        push!(r, RemoteLibrary(
+            "highlight",
+            "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/$(hljs_version)/highlight.min.js"
+        ))
+        prepend!(languages, ["julia", "julia-repl"])
+        for language in languages
+            language = jsescape(language)
+            push!(r, RemoteLibrary(
+                "highlight-$(language)",
+                "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/$(hljs_version)/languages/$(language).min.js",
+                deps = ["highlight"]
+            ))
+        end
+        push!(r, Snippet(
+            vcat(["jquery", "highlight"], ["highlight-$(jsescape(language))" for language in languages]),
+            ["\$", "hljs"],
+            raw"""
+            $(document).ready(function() {
+                hljs.initHighlighting();
+            })
+            """
+        ))
+    end
+end
 
 struct SearchRecord
     src :: String
@@ -261,10 +322,37 @@ function render(doc::Documents.Document, settings::HTML=HTML())
 
     ctx = HTMLContext(doc, settings)
     ctx.search_index_js = "search_index.js"
-
     ctx.themeswap_js = copy_asset("themeswap.js", doc)
-    ctx.documenter_js = copy_asset("documenter.js", doc)
-    ctx.search_js = copy_asset("search.js", doc)
+
+    # Generate documenter.js file with all the JS dependencies
+    ctx.documenter_js = "assets/documenter.js"
+    if isfile(joinpath(doc.user.source, "assets", "documenter.js"))
+        @warn "not creating 'documenter.js', provided by the user."
+    else
+        r = JSDependencies.RequireJS([
+            JS.jquery, JS.jqueryui, JS.headroom, JS.headroom_jquery,
+            JS.katex, JS.katex_auto_render,
+        ])
+        JS.highlightjs!(r, settings.highlights)
+        for filename in readdir(joinpath(ASSETS, "js"))
+            path = joinpath(ASSETS, "js", filename)
+            endswith(filename, ".js") && isfile(path) || continue
+            push!(r, JSDependencies.parse_snippet(path))
+        end
+        JSDependencies.verify(r; verbose=true) || error("RequireJS declaration is invalid")
+        JSDependencies.writejs(joinpath(doc.user.build, "assets", "documenter.js"), r)
+    end
+
+    # Generate search.js file with all the JS dependencies
+    ctx.search_js = "assets/search.js"
+    if isfile(joinpath(doc.user.source, "assets", "search.js"))
+        @warn "not creating 'search.js', provided by the user."
+    else
+        r = JSDependencies.RequireJS([JS.jquery, JS.lunr, JS.lodash])
+        push!(r, JSDependencies.parse_snippet(joinpath(ASSETS, "search.js")))
+        JSDependencies.verify(r; verbose=true) || error("RequireJS declaration is invalid")
+        JSDependencies.writejs(joinpath(doc.user.build, "assets", "search.js"), r)
+    end
 
     for theme in THEMES
         copy_asset("themes/$(theme).css", doc)
